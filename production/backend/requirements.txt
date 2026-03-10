@@ -1,0 +1,6 @@
+flask
+flask-cors
+plaid-python
+pandas
+openpyxl
+python-dotenv

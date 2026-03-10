@@ -1,0 +1,4 @@
+.venv
+.env
+access_token.txt
+node_modules/
