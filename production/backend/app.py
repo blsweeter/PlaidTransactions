@@ -35,8 +35,23 @@ def _load_access_tokens():
 
 def _save_access_tokens(tokens):
     serialized = json.dumps(tokens)
-    set_key(ENV_FILE, "PLAID_ACCESS_TOKENS", serialized)
     os.environ["PLAID_ACCESS_TOKENS"] = serialized
+
+    # Write directly to avoid Docker bind-mount rename error from set_key
+    lines = []
+    found = False
+    if os.path.exists(ENV_FILE):
+        with open(ENV_FILE, "r") as f:
+            lines = f.readlines()
+        for i, line in enumerate(lines):
+            if line.startswith("PLAID_ACCESS_TOKENS="):
+                lines[i] = f"PLAID_ACCESS_TOKENS={serialized}\n"
+                found = True
+                break
+    if not found:
+        lines.append(f"PLAID_ACCESS_TOKENS={serialized}\n")
+    with open(ENV_FILE, "w") as f:
+        f.writelines(lines)
 
 host = {
     "sandbox": "https://sandbox.plaid.com",
