@@ -158,12 +158,12 @@ def fetch_transactions():
 
         if existing_t_df is not None:
             transaction_df = pd.concat([existing_t_df, transaction_df], ignore_index=True)
-            transaction_df.drop_duplicates(subset=["Transaction Id"], inplace=True)
-            transaction_df.sort_values("Date", ascending=False, inplace=True)
+            transaction_df.drop_duplicates(subset=["transaction_id"], inplace=True)
+            transaction_df.sort_values("date", ascending=False, inplace=True)
 
         if existing_a_df is not None:
             account_df = pd.concat([existing_a_df, account_df], ignore_index=True)
-            account_df.drop_duplicates(subset=["Account Id"], inplace=True)
+            account_df.drop_duplicates(subset=["account_id"], inplace=True)
 
         os.makedirs(os.path.dirname(EXCEL_FILE_PATH), exist_ok=True)
         with pd.ExcelWriter(EXCEL_FILE_PATH, engine="openpyxl") as writer:
@@ -221,19 +221,26 @@ def _parse_transactions(transactions, accounts):
     rows = []
     for t in transactions:
         acct = account_map.get(t["account_id"], {})
-        rows.append({
-            "Transaction Id": t["transaction_id"],
-            "Date": t["date"],
-            "Name": t["name"],
-            "Merchant Name": t.get("merchant_name"),
-            "Amount": t["amount"],
-            "Account Name": acct.get("name"),
-            "Account Full Name": acct.get("official_name"),
-            "Account Id": t["account_id"],
-        })
+        # Flatten the full transaction object
+        row = {}
+        for key, val in t.items():
+            if isinstance(val, dict):
+                # Flatten nested dicts (e.g. payment_meta, location)
+                for subkey, subval in val.items():
+                    row[f"{key}_{subkey}"] = subval
+            elif isinstance(val, list):
+                row[key] = ", ".join(str(v) for v in val)
+            else:
+                row[key] = val
+        # Add account info alongside
+        row["account_name"] = acct.get("name")
+        row["account_official_name"] = acct.get("official_name")
+        row["account_type"] = acct.get("type")
+        row["account_subtype"] = acct.get("subtype")
+        rows.append(row)
     df = pd.DataFrame(rows)
     if not df.empty:
-        df.sort_values("Date", ascending=False, inplace=True)
+        df.sort_values("date", ascending=False, inplace=True)
     return df
 
 
@@ -244,14 +251,14 @@ def _parse_account_data(accounts):
         if a["account_id"] in seen:
             continue
         seen.add(a["account_id"])
-        rows.append({
-            "Account Id": a["account_id"],
-            "Name": a["name"],
-            "Full Name": a["official_name"],
-            "Type": a["subtype"],
-            "Available Balance": a["balances"]["available"],
-            "Current Balance": a["balances"]["current"],
-        })
+        row = {}
+        for key, val in a.items():
+            if isinstance(val, dict):
+                for subkey, subval in val.items():
+                    row[f"{key}_{subkey}"] = subval
+            else:
+                row[key] = val
+        rows.append(row)
     return pd.DataFrame(rows)
 
 
