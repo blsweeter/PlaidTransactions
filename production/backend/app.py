@@ -167,8 +167,8 @@ def fetch_transactions():
 
         os.makedirs(os.path.dirname(EXCEL_FILE_PATH), exist_ok=True)
         with pd.ExcelWriter(EXCEL_FILE_PATH, engine="openpyxl") as writer:
-            transaction_df.to_excel(writer, sheet_name="Transactions", index=False)
-            account_df.to_excel(writer, sheet_name="Account Info", index=False)
+            _strip_timezones(transaction_df).to_excel(writer, sheet_name="Transactions", index=False)
+            _strip_timezones(account_df).to_excel(writer, sheet_name="Account Info", index=False)
 
         return jsonify({
             "success": True,
@@ -189,6 +189,15 @@ def download():
         download_name="transactions.xlsx",
         mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
+
+
+def _strip_timezones(df):
+    """Convert all timezone-aware datetime columns to timezone-naive (UTC) for Excel compatibility."""
+    for col in df.columns:
+        if pd.api.types.is_datetime64_any_dtype(df[col]):
+            if hasattr(df[col].dt, "tz") and df[col].dt.tz is not None:
+                df[col] = df[col].dt.tz_convert("UTC").dt.tz_localize(None)
+    return df
 
 
 def _fetch_data(access_token, start_date, end_date):
@@ -216,27 +225,44 @@ def _fetch_data(access_token, start_date, end_date):
     return transactions, accounts
 
 
+def _to_dict(obj):
+    """Recursively convert Plaid model objects or dicts to plain dicts."""
+    if hasattr(obj, "to_dict"):
+        return obj.to_dict()
+    elif isinstance(obj, dict):
+        return obj
+    return obj
+
+
+def _flatten(data, prefix=""):
+    """Flatten a nested dict into a single-level dict with underscore-joined keys."""
+    row = {}
+    if not isinstance(data, dict):
+        data = _to_dict(data) if hasattr(data, "to_dict") else {}
+    for key, val in data.items():
+        full_key = f"{key}" if not prefix else f"{prefix}_{key}"
+        val = _to_dict(val) if hasattr(val, "to_dict") else val
+        if isinstance(val, dict):
+            row.update(_flatten(val, prefix=full_key))
+        elif isinstance(val, list):
+            row[full_key] = ", ".join(str(_to_dict(v) if hasattr(v, "to_dict") else v) for v in val)
+        else:
+            row[full_key] = val
+    return row
+
+
 def _parse_transactions(transactions, accounts):
-    account_map = {a["account_id"]: a for a in accounts}
+    account_map = {_to_dict(a)["account_id"]: _to_dict(a) for a in accounts}
     rows = []
     for t in transactions:
-        acct = account_map.get(t["account_id"], {})
-        # Flatten the full transaction object
-        row = {}
-        for key, val in t.items():
-            if isinstance(val, dict):
-                # Flatten nested dicts (e.g. payment_meta, location)
-                for subkey, subval in val.items():
-                    row[f"{key}_{subkey}"] = subval
-            elif isinstance(val, list):
-                row[key] = ", ".join(str(v) for v in val)
-            else:
-                row[key] = val
+        t_dict = _to_dict(t)
+        acct = account_map.get(t_dict.get("account_id"), {})
+        row = _flatten(t_dict)
         # Add account info alongside
         row["account_name"] = acct.get("name")
         row["account_official_name"] = acct.get("official_name")
-        row["account_type"] = acct.get("type")
-        row["account_subtype"] = acct.get("subtype")
+        row["account_type"] = str(acct.get("type", ""))
+        row["account_subtype"] = str(acct.get("subtype", ""))
         rows.append(row)
     df = pd.DataFrame(rows)
     if not df.empty:
@@ -248,17 +274,11 @@ def _parse_account_data(accounts):
     seen = set()
     rows = []
     for a in accounts:
-        if a["account_id"] in seen:
+        a_dict = _to_dict(a)
+        if a_dict["account_id"] in seen:
             continue
-        seen.add(a["account_id"])
-        row = {}
-        for key, val in a.items():
-            if isinstance(val, dict):
-                for subkey, subval in val.items():
-                    row[f"{key}_{subkey}"] = subval
-            else:
-                row[key] = val
-        rows.append(row)
+        seen.add(a_dict["account_id"])
+        rows.append(_flatten(a_dict))
     return pd.DataFrame(rows)
 
 
